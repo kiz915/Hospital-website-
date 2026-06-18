@@ -1,0 +1,113 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // 1. Global Catch-All Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Reusable global helpers
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        (request.auth.token.email == "25it161@skcet.ac.in" && request.auth.token.email_verified == true) ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "admin")
+      );
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Entity Validations
+
+    function isValidUser(data) {
+      return data.uid is string && data.uid.size() <= 128 &&
+             data.name is string && data.name.size() <= 100 &&
+             data.email is string && data.email.size() <= 100 &&
+             data.role in ["patient", "admin"];
+    }
+
+    function isValidDoctor(data) {
+      return data.id is string && data.id.size() <= 128 &&
+             data.name is string && data.name.size() <= 100 &&
+             data.specialty is string && data.specialty.size() <= 100 &&
+             data.department is string && data.department.size() <= 100 &&
+             data.bio is string && data.bio.size() <= 1000 &&
+             data.status in ["active", "inactive"];
+    }
+
+    function isValidAppointment(data) {
+      return data.id is string && data.id.size() <= 128 &&
+             data.patientId is string && data.patientId.size() <= 128 &&
+             data.patientName is string && data.patientName.size() <= 100 &&
+             data.patientEmail is string && data.patientEmail.size() <= 100 &&
+             data.doctorId is string && data.doctorId.size() <= 128 &&
+             data.doctorName is string && data.doctorName.size() <= 100 &&
+             data.doctorSpecialty is string && data.doctorSpecialty.size() <= 100 &&
+             data.date is string && data.date.size() <= 30 &&
+             data.time is string && data.time.size() <= 30 &&
+             data.status in ["pending", "confirmed", "completed", "cancelled"] &&
+             (!("notes" in data) || data.notes is string);
+    }
+
+    function isValidReport(data) {
+      return data.id is string && data.id.size() <= 128 &&
+             data.patientId is string && data.patientId.size() <= 128 &&
+             data.fileName is string && data.fileName.size() <= 200 &&
+             data.fileSize is string && data.fileSize.size() <= 50 &&
+             data.category is string && data.category.size() <= 100 &&
+             (!("notes" in data) || data.notes is string) &&
+             (!("content" in data) || data.content is string);
+    }
+
+    // Collection match blocks
+
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isOwner(userId) && isValidUser(incoming()) && incoming().role == "patient" || isAdmin();
+      allow update: if (isOwner(userId) || isAdmin()) && isValidUser(incoming()) && (incoming().role == existing().role || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    match /doctors/{doctorId} {
+      allow read: if true;
+      allow create: if isAdmin() && isValidDoctor(incoming());
+      allow update: if isAdmin() && isValidDoctor(incoming());
+      allow delete: if isAdmin();
+    }
+
+    match /appointments/{appointmentId} {
+      allow read: if isSignedIn() && (existing().patientId == request.auth.uid || isAdmin());
+      allow create: if (
+        (isOwner(incoming().patientId) && isValidAppointment(incoming()) && incoming().status == "pending" && incoming().createdAt == request.time && incoming().updatedAt == request.time) ||
+        (isAdmin() && isValidAppointment(incoming()))
+      );
+      allow update: if isSignedIn() && (
+        (isOwner(existing().patientId) && incoming().patientId == existing().patientId && incoming().status == "cancelled" && incoming().diff(existing()).affectedKeys().hasOnly(["status", "updatedAt"]) && incoming().updatedAt == request.time) ||
+        (isAdmin() && isValidAppointment(incoming()))
+      );
+      allow delete: if isAdmin();
+    }
+
+    match /reports/{reportId} {
+      allow read: if isSignedIn() && (existing().patientId == request.auth.uid || isAdmin());
+      allow create: if isOwner(incoming().patientId) && isValidReport(incoming()) && incoming().uploadedAt == request.time;
+      allow update: if (isOwner(existing().patientId) || isAdmin()) && isValidReport(incoming()) && incoming().patientId == existing().patientId;
+      allow delete: if isOwner(existing().patientId) || isAdmin();
+    }
+  }
+}

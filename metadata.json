@@ -1,0 +1,6 @@
+{
+  "name": "Hospital Website and Patient Portal",
+  "description": "A responsive green medical-themed hospital website with patient portal and admin workspace. Supports browsing departments, doctor directory, Google Sign-In, appointment scheduling, medical report uploading, and comprehensive patient/appointment management.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
