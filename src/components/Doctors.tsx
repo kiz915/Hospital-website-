@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Doctor } from '../types';
 import { fetchDoctors } from '../firebaseUtils';
+import { SEED_DOCTORS } from '../data';
 import { 
   Search, 
   Filter, 
@@ -11,7 +12,8 @@ import {
   MessageSquare,
   Award,
   CheckCircle2,
-  Stethoscope
+  Stethoscope,
+  DatabaseZap
 } from 'lucide-react';
 
 interface DoctorsProps {
@@ -20,6 +22,7 @@ interface DoctorsProps {
 
 export default function Doctors({ onBookDoctor }: DoctorsProps) {
   const [doctors, setDoctors] = useState<Doctor[]>([]);
+  const [usingFallback, setUsingFallback] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -32,10 +35,27 @@ export default function Doctors({ onBookDoctor }: DoctorsProps) {
     async function load() {
       try {
         const list = await fetchDoctors('active');
-        setDoctors(list);
+        if (list && list.length > 0) {
+          setDoctors(list);
+          setUsingFallback(false);
+        } else {
+          // If Firestore is empty (never seeded yet), load seeded doctors list locally as a seamless fallback
+          const localFallback = SEED_DOCTORS.map(doc => ({
+            ...doc,
+            createdAt: new Date().toISOString()
+          })) as Doctor[];
+          setDoctors(localFallback);
+          setUsingFallback(true);
+        }
       } catch (err: any) {
-        console.error(err);
-        setError('Failed to pull physician directory. Verify cloud database.');
+        console.warn('Could not connect to online Firestore database, launching sandbox offline fallback mode:', err);
+        // Load offline local roster data so the UI remains active and interactive
+        const localFallback = SEED_DOCTORS.map(doc => ({
+          ...doc,
+          createdAt: new Date().toISOString()
+        })) as Doctor[];
+        setDoctors(localFallback);
+        setUsingFallback(true);
       } finally {
         setLoading(false);
       }
@@ -100,6 +120,17 @@ export default function Doctors({ onBookDoctor }: DoctorsProps) {
           ))}
         </div>
       </div>
+
+      {/* Offline Fallback Alert */}
+      {usingFallback && (
+        <div className="flex items-center justify-between p-3.5 bg-amber-50 border border-amber-200 rounded-lg text-amber-800 text-[11px] font-medium mb-6" id="doctors-offline-fallback-alert">
+          <div className="flex items-center space-x-2">
+            <DatabaseZap className="h-4 w-4 text-amber-600 animate-pulse shrink-0" />
+            <span><strong>Demo Catalog:</strong> Serving direct local roster. Connect and authorize your Firebase project domains to bind fully online.</span>
+          </div>
+          <span className="text-[9px] bg-amber-100 text-amber-800 font-bold px-1.5 py-0.5 rounded uppercase tracking-wider">Local Cache</span>
+        </div>
+      )}
 
       {/* Roster display */}
       {error && (

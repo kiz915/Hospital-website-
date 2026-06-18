@@ -50,6 +50,8 @@ export default function Auth({ onAuthSuccess }: AuthProps) {
         setError('Popup closed before authentication finished.');
       } else if (err.code === 'auth/cancelled-popup-request') {
         setError('Popup has been cancelled. Multiple popups opened.');
+      } else if (err.code === 'auth/unauthorized-domain') {
+        setError('Unauthorized Domain: The domain you are accessing this app from has not been authorized in the Firebase console. Please go to your Firebase Console under Authentication > Settings > Authorized Domains and add ' + window.location.hostname + ' to the list.');
       } else {
         setError(err.message || 'Failed to authenticate via Google.');
       }
