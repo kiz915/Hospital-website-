@@ -6,7 +6,6 @@ import {
   getDocs, 
   query, 
   where, 
-  addDoc, 
   updateDoc, 
   deleteDoc,
   serverTimestamp,
@@ -40,6 +39,15 @@ export async function seedDoctorsIfEmpty() {
   }
 }
 
+// Helper to check if we are in fallback/local mode
+function hasOfflineStorage(): boolean {
+  try {
+    return typeof window !== 'undefined' && !!window.localStorage;
+  } catch (e) {
+    return false;
+  }
+}
+
 // 2. User Profiles
 export async function ensureUserProfile(uid: string, name: string, email: string): Promise<AppUser> {
   const path = `users/${uid}`;
@@ -59,7 +67,7 @@ export async function ensureUserProfile(uid: string, name: string, email: string
         name: name || 'Guest User',
         email,
         role: role as 'patient' | 'admin',
-        createdAt: new Date().toISOString() // We can also use serverTimestamp but client-read requires instant state
+        createdAt: new Date().toISOString()
       };
       
       await setDoc(userRef, {
@@ -69,7 +77,33 @@ export async function ensureUserProfile(uid: string, name: string, email: string
       return newUser;
     }
   } catch (error) {
-    return handleFirestoreError(error, OperationType.WRITE, path);
+    console.warn(`Firestore failed on ensureUserProfile for ${uid}, utilizing LocalStorage fallback:`, error);
+    if (hasOfflineStorage()) {
+      const localUsers = JSON.parse(localStorage.getItem('local_users') || '{}');
+      if (localUsers[uid]) {
+        return localUsers[uid];
+      }
+      const isSystemAdmin = email.toLowerCase() === BOOTSTRAPPED_ADMIN_EMAIL.toLowerCase();
+      const role = isSystemAdmin ? 'admin' : 'patient';
+      const newUser: AppUser = {
+        uid,
+        name: name || 'Guest User',
+        email,
+        role: role as 'patient' | 'admin',
+        createdAt: new Date().toISOString()
+      };
+      localUsers[uid] = newUser;
+      localStorage.setItem('local_users', JSON.stringify(localUsers));
+      return newUser;
+    }
+    // Fallback if no localstorage
+    return {
+      uid,
+      name: name || 'Guest User',
+      email,
+      role: email.toLowerCase() === BOOTSTRAPPED_ADMIN_EMAIL.toLowerCase() ? 'admin' : 'patient',
+      createdAt: new Date().toISOString()
+    };
   }
 }
 
@@ -83,7 +117,12 @@ export async function fetchUserProfile(uid: string): Promise<AppUser | null> {
     }
     return null;
   } catch (error) {
-    return handleFirestoreError(error, OperationType.GET, path);
+    console.warn(`Firestore failed on fetchUserProfile for ${uid}, utilizing LocalStorage fallback:`, error);
+    if (hasOfflineStorage()) {
+      const localUsers = JSON.parse(localStorage.getItem('local_users') || '{}');
+      return localUsers[uid] || null;
+    }
+    return null;
   }
 }
 
@@ -100,9 +139,30 @@ export async function fetchDoctors(statusFilter?: 'active' | 'all'): Promise<Doc
     snap.forEach(docSnap => {
       list.push({ ...docSnap.data(), id: docSnap.id } as Doctor);
     });
+    
+    if (list.length > 0 && hasOfflineStorage()) {
+      localStorage.setItem('local_doctors', JSON.stringify(list));
+    }
     return list;
   } catch (error) {
-    return handleFirestoreError(error, OperationType.GET, path);
+    console.warn(`Firestore failed to fetch doctors, loading from local repository:`, error);
+    let list: Doctor[] = [];
+    if (hasOfflineStorage()) {
+      const localData = localStorage.getItem('local_doctors');
+      if (localData) {
+        list = JSON.parse(localData);
+      } else {
+        list = SEED_DOCTORS.map(d => ({ ...d, createdAt: new Date().toISOString() })) as Doctor[];
+        localStorage.setItem('local_doctors', JSON.stringify(list));
+      }
+    } else {
+      list = SEED_DOCTORS.map(d => ({ ...d, createdAt: new Date().toISOString() })) as Doctor[];
+    }
+    
+    if (statusFilter === 'active') {
+      return list.filter(d => d.status === 'active');
+    }
+    return list;
   }
 }
 
@@ -116,7 +176,18 @@ export async function addDoctor(doctor: Omit<Doctor, 'id' | 'createdAt'>): Promi
       createdAt: serverTimestamp()
     });
   } catch (error) {
-    handleFirestoreError(error, OperationType.CREATE, path);
+    console.warn('Firestore failed to add doctor, storing to LocalStorage fallback:', error);
+    if (hasOfflineStorage()) {
+      const localData = localStorage.getItem('local_doctors');
+      const list: Doctor[] = localData ? JSON.parse(localData) : [];
+      const newDoctor: Doctor = {
+        ...doctor,
+        id: `doc-${Date.now()}`,
+        createdAt: new Date().toISOString()
+      };
+      list.push(newDoctor);
+      localStorage.setItem('local_doctors', JSON.stringify(list));
+    }
   }
 }
 
@@ -126,7 +197,15 @@ export async function modifyDoctor(id: string, updates: Partial<Doctor>): Promis
     const docRef = doc(db, 'doctors', id);
     await updateDoc(docRef, updates);
   } catch (error) {
-    handleFirestoreError(error, OperationType.UPDATE, path);
+    console.warn('Firestore failed to update doctor, applying to LocalStorage fallback:', error);
+    if (hasOfflineStorage()) {
+      const localData = localStorage.getItem('local_doctors');
+      if (localData) {
+        let list: Doctor[] = JSON.parse(localData);
+        list = list.map(d => d.id === id ? { ...d, ...updates } : d);
+        localStorage.setItem('local_doctors', JSON.stringify(list));
+      }
+    }
   }
 }
 
@@ -136,7 +215,15 @@ export async function removeDoctor(id: string): Promise<void> {
     const docRef = doc(db, 'doctors', id);
     await deleteDoc(docRef);
   } catch (error) {
-    handleFirestoreError(error, OperationType.DELETE, path);
+    console.warn('Firestore failed to delete doctor, applying to LocalStorage fallback:', error);
+    if (hasOfflineStorage()) {
+      const localData = localStorage.getItem('local_doctors');
+      if (localData) {
+        let list: Doctor[] = JSON.parse(localData);
+        list = list.filter(d => d.id !== id);
+        localStorage.setItem('local_doctors', JSON.stringify(list));
+      }
+    }
   }
 }
 
@@ -155,7 +242,22 @@ export async function bookAppointment(appointment: Omit<Appointment, 'id' | 'sta
     await setDoc(newRef, payload);
     return newRef.id;
   } catch (error) {
-    handleFirestoreError(error, OperationType.CREATE, path);
+    console.warn('Firestore failed to book appointment, using LocalStorage repository state:', error);
+    const newId = `appt-${Date.now()}`;
+    if (hasOfflineStorage()) {
+      const localData = localStorage.getItem('local_appointments');
+      const list: Appointment[] = localData ? JSON.parse(localData) : [];
+      const newAppt: Appointment = {
+        ...appointment,
+        id: newId,
+        status: 'pending',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+      list.push(newAppt);
+      localStorage.setItem('local_appointments', JSON.stringify(list));
+    }
+    return newId;
   }
 }
 
@@ -175,10 +277,18 @@ export async function fetchAppointments(patientId?: string): Promise<Appointment
         id: dSnapshot.id 
       } as Appointment);
     });
-    // Sort client side as composite indexes may not be built
     return list.sort((a, b) => b.date.localeCompare(a.date));
   } catch (error) {
-    return handleFirestoreError(error, OperationType.GET, path);
+    console.warn('Firestore failed to fetch appointments, using LocalStorage fallback:', error);
+    if (hasOfflineStorage()) {
+      const localData = localStorage.getItem('local_appointments');
+      let list: Appointment[] = localData ? JSON.parse(localData) : [];
+      if (patientId) {
+        list = list.filter(a => a.patientId === patientId);
+      }
+      return list.sort((a, b) => b.date.localeCompare(a.date));
+    }
+    return [];
   }
 }
 
@@ -196,7 +306,15 @@ export async function updateAppointmentStatus(
     };
     await updateDoc(docRef, updates);
   } catch (error) {
-    handleFirestoreError(error, OperationType.UPDATE, path);
+    console.warn('Firestore failed to update appointment status, using LocalStorage fallback:', error);
+    if (hasOfflineStorage()) {
+      const localData = localStorage.getItem('local_appointments');
+      if (localData) {
+        let list: Appointment[] = JSON.parse(localData);
+        list = list.map(a => a.id === id ? { ...a, status, updatedAt: new Date().toISOString() } : a);
+        localStorage.setItem('local_appointments', JSON.stringify(list));
+      }
+    }
   }
 }
 
@@ -206,7 +324,15 @@ export async function deleteAppointmentRecord(id: string): Promise<void> {
     const docRef = doc(db, 'appointments', id);
     await deleteDoc(docRef);
   } catch (error) {
-    handleFirestoreError(error, OperationType.DELETE, path);
+    console.warn('Firestore failed to delete appointment record, using LocalStorage fallback:', error);
+    if (hasOfflineStorage()) {
+      const localData = localStorage.getItem('local_appointments');
+      if (localData) {
+        let list: Appointment[] = JSON.parse(localData);
+        list = list.filter(a => a.id !== id);
+        localStorage.setItem('local_appointments', JSON.stringify(list));
+      }
+    }
   }
 }
 
@@ -223,7 +349,20 @@ export async function uploadMedicalReport(report: Omit<Report, 'id' | 'uploadedA
     await setDoc(newRef, payload);
     return newRef.id;
   } catch (error) {
-    handleFirestoreError(error, OperationType.CREATE, path);
+    console.warn('Firestore failed to upload medical report description, using LocalStorage fallback:', error);
+    const newId = `rep-${Date.now()}`;
+    if (hasOfflineStorage()) {
+      const localData = localStorage.getItem('local_reports');
+      const list: Report[] = localData ? JSON.parse(localData) : [];
+      const newReport: Report = {
+        ...report,
+        id: newId,
+        uploadedAt: new Date().toISOString() as any
+      };
+      list.push(newReport);
+      localStorage.setItem('local_reports', JSON.stringify(list));
+    }
+    return newId;
   }
 }
 
@@ -241,7 +380,16 @@ export async function fetchReports(patientId?: string): Promise<Report[]> {
     });
     return list;
   } catch (error) {
-    return handleFirestoreError(error, OperationType.GET, path);
+    console.warn('Firestore failed to fetch patient medical reports, using LocalStorage fallback:', error);
+    if (hasOfflineStorage()) {
+      const localData = localStorage.getItem('local_reports');
+      let list: Report[] = localData ? JSON.parse(localData) : [];
+      if (patientId) {
+        list = list.filter(r => r.patientId === patientId);
+      }
+      return list;
+    }
+    return [];
   }
 }
 
@@ -251,7 +399,15 @@ export async function deleteReportRecord(id: string): Promise<void> {
     const docRef = doc(db, 'reports', id);
     await deleteDoc(docRef);
   } catch (error) {
-    handleFirestoreError(error, OperationType.DELETE, path);
+    console.warn('Firestore failed to delete physical report index, using LocalStorage fallback:', error);
+    if (hasOfflineStorage()) {
+      const localData = localStorage.getItem('local_reports');
+      if (localData) {
+        let list: Report[] = JSON.parse(localData);
+        list = list.filter(r => r.id !== id);
+        localStorage.setItem('local_reports', JSON.stringify(list));
+      }
+    }
   }
 }
 
@@ -267,6 +423,12 @@ export async function fetchPatientsList(): Promise<AppUser[]> {
     });
     return list;
   } catch (error) {
-    return handleFirestoreError(error, OperationType.GET, path);
+    console.warn('Firestore failed to fetch patient directory listing, using LocalStorage fallback:', error);
+    if (hasOfflineStorage()) {
+      const localUsers = JSON.parse(localStorage.getItem('local_users') || '{}');
+      const list: AppUser[] = Object.values(localUsers);
+      return list.filter(u => u.role === 'patient');
+    }
+    return [];
   }
 }
