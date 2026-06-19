@@ -64,6 +64,23 @@
         "content": { "type": "string" }
       },
       "required": ["id", "patientId", "fileName", "fileSize", "uploadedAt", "category"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Record of changes performed by administrators",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "adminId": { "type": "string" },
+        "adminName": { "type": "string" },
+        "adminEmail": { "type": "string" },
+        "action": { "type": "string" },
+        "details": { "type": "string" },
+        "targetId": { "type": "string" },
+        "targetName": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "adminId", "adminName", "adminEmail", "action", "details", "targetId", "targetName", "timestamp"]
     }
   },
   "firestore": {
@@ -82,6 +99,10 @@
     "reports/{reportId}": {
       "schema": "Report",
       "description": "Medical reports uploaded by patients"
+    },
+    "audit_logs/{logId}": {
+      "schema": "AuditLog",
+      "description": "Action logs of system updates and administration modifications"
     }
   }
 }

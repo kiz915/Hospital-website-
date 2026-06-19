@@ -53,3 +53,15 @@ export interface Department {
   description: string;
   longDescription: string;
 }
+
+export interface AuditLog {
+  id: string;
+  adminId: string;
+  adminName: string;
+  adminEmail: string;
+  action: string;
+  details: string;
+  targetId: string;
+  targetName: string;
+  timestamp: any;
+}

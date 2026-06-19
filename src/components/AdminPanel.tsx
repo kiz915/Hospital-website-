@@ -8,8 +8,10 @@ import {
   fetchAppointments, 
   updateAppointmentStatus, 
   deleteAppointmentRecord,
-  fetchPatientsList
+  fetchPatientsList,
+  writeAuditLog
 } from '../firebaseUtils';
+import AdminAuditLog from './AdminAuditLog';
 import { 
   ShieldAlert, 
   Calendar, 
@@ -29,7 +31,8 @@ import {
   SlidersHorizontal,
   Ban,
   CheckCircle,
-  FileCheck
+  FileCheck,
+  ClipboardList
 } from 'lucide-react';
 
 interface AdminPanelProps {
@@ -37,7 +40,7 @@ interface AdminPanelProps {
 }
 
 export default function AdminPanel({ user }: AdminPanelProps) {
-  const [activeTab, setActiveTab] = useState<'appointments' | 'doctors' | 'patients'>('appointments');
+  const [activeTab, setActiveTab] = useState<'appointments' | 'doctors' | 'patients' | 'auditLogs'>('appointments');
   const [loading, setLoading] = useState(true);
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [doctors, setDoctors] = useState<Doctor[]>([]);
@@ -89,7 +92,19 @@ export default function AdminPanel({ user }: AdminPanelProps) {
 
   const handleUpdateStatus = async (apptId: string, newStatus: any) => {
     try {
+      const appt = appointments.find(a => a.id === apptId);
       await updateAppointmentStatus(apptId, newStatus);
+      if (appt) {
+        await writeAuditLog({
+          adminId: user.uid,
+          adminName: user.name || 'System Admin',
+          adminEmail: user.email,
+          action: 'Update Appointment',
+          details: `Changed appointment status to '${newStatus}' for patient ${appt.patientName} with Dr. ${appt.doctorName}.`,
+          targetId: apptId,
+          targetName: appt.patientName
+        });
+      }
       loadAllAdminData();
     } catch (err) {
       setError('Error altering appointment status.');
@@ -99,7 +114,19 @@ export default function AdminPanel({ user }: AdminPanelProps) {
   const handleDeleteAppt = async (apptId: string) => {
     if (!window.confirm('Delete this appointment record permanently?')) return;
     try {
+      const appt = appointments.find(a => a.id === apptId);
       await deleteAppointmentRecord(apptId);
+      if (appt) {
+        await writeAuditLog({
+          adminId: user.uid,
+          adminName: user.name || 'System Admin',
+          adminEmail: user.email,
+          action: 'Delete Appointment',
+          details: `Permanently deleted appointment record of patient ${appt.patientName} scheduled with Dr. ${appt.doctorName} (Date: ${appt.date}, Time: ${appt.time}).`,
+          targetId: apptId,
+          targetName: appt.patientName
+        });
+      }
       loadAllAdminData();
     } catch (err) {
       setError('Error clearing appointment log.');
@@ -131,8 +158,26 @@ export default function AdminPanel({ user }: AdminPanelProps) {
 
       if (editDocId) {
         await modifyDoctor(editDocId, payload);
+        await writeAuditLog({
+          adminId: user.uid,
+          adminName: user.name || 'System Admin',
+          adminEmail: user.email,
+          action: 'Modify Doctor',
+          details: `Updated clinician details for Dr. ${payload.name} (${payload.specialty}, Dept: ${payload.department}, Status: ${payload.status}).`,
+          targetId: editDocId,
+          targetName: `Dr. ${payload.name}`
+        });
       } else {
-        await addDoctor(payload);
+        const newDocId = await addDoctor(payload);
+        await writeAuditLog({
+          adminId: user.uid,
+          adminName: user.name || 'System Admin',
+          adminEmail: user.email,
+          action: 'Add Doctor',
+          details: `Added new clinician Dr. ${payload.name} (${payload.specialty}, Dept: ${payload.department}) with status ${payload.status}.`,
+          targetId: newDocId,
+          targetName: `Dr. ${payload.name}`
+        });
       }
 
       setAddDocModal(false);
@@ -171,7 +216,19 @@ export default function AdminPanel({ user }: AdminPanelProps) {
   const handleDeleteDoctor = async (docId: string) => {
     if (!window.confirm('Delete this clinician profile from listings?')) return;
     try {
+      const docItem = doctors.find(d => d.id === docId);
       await removeDoctor(docId);
+      if (docItem) {
+        await writeAuditLog({
+          adminId: user.uid,
+          adminName: user.name || 'System Admin',
+          adminEmail: user.email,
+          action: 'Remove Doctor',
+          details: `Removed Dr. ${docItem.name} (${docItem.specialty}, Dept: ${docItem.department}) from public listings.`,
+          targetId: docId,
+          targetName: `Dr. ${docItem.name}`
+        });
+      }
       loadAllAdminData();
     } catch (err) {
       setError('Failed to clear clinician record.');
@@ -294,6 +351,19 @@ export default function AdminPanel({ user }: AdminPanelProps) {
         >
           <Users className="h-3.5 w-3.5" />
           <span>Patient Directory</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('auditLogs')}
+          className={`flex items-center space-x-1.5 py-2.5 px-4 font-bold text-xs uppercase tracking-wider border-b-2 transition-colors cursor-pointer ${
+            activeTab === 'auditLogs'
+              ? 'border-indigo-650 text-indigo-700 bg-slate-50'
+              : 'border-transparent text-slate-550 hover:text-indigo-700'
+          }`}
+          id="admin-tab-audit-logs"
+        >
+          <ClipboardList className="h-3.5 w-3.5" />
+          <span>System Audit Logs</span>
         </button>
       </div>
 
@@ -538,7 +608,7 @@ export default function AdminPanel({ user }: AdminPanelProps) {
             ))}
           </div>
         </div>
-      ) : (
+      ) : activeTab === 'patients' ? (
         /* PATIENTS TABS */
         <div id="admin-patients-view">
           <div className="bg-white p-4 rounded-xl border border-slate-100 flex items-center space-x-3 mb-6" id="patient-search-holder">
@@ -580,6 +650,11 @@ export default function AdminPanel({ user }: AdminPanelProps) {
               </div>
             ))}
           </div>
+        </div>
+      ) : (
+        /* SYSTEM AUDIT LOGS TABS */
+        <div id="admin-audit-logs-view">
+          <AdminAuditLog currentAdminEmail={user.email} />
         </div>
       )}
 
